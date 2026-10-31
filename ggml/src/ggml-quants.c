@@ -5008,11 +5008,6 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
     if (qh) memset(qh, 0, super_block_size/8);
     dh[0] = GGML_FP32_TO_FP16(0.f);
 
-    float mid[15];
-    float fval[16];
-    for (int k = 0; k < 15; ++k) mid[k] = 0.5f*(values[k] + values[k+1]);
-    for (int k = 0; k < 16; ++k) fval[k] = values[k];
-
     float max_scale = 0, amax_scale = 0;
     for (int ib = 0; ib < super_block_size/block_size; ++ib) {
         const float * xb = x + ib*block_size;
@@ -5036,12 +5031,8 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
             continue;
         }
         float d = ntry > 0 ? -max/values[0] : max/values[0];
-        // lane 0 is the initial guess, lanes 1..nt-1 are itry = -ntry..ntry; each lane sums over j in order
-        const int nt = ntry >= 0 ? 2*ntry + 2 : 1;
-        float idt[16], sqx[16], sq2[16];
-        idt[0] = 1/d;
-        for (int t = 1; t < nt; ++t) idt[t] = (t - 1 - ntry + values[0])/max;
-        for (int t = 0; t < nt; ++t) sqx[t] = sq2[t] = 0;
+        float id = 1/d;
+        float sumqx = 0, sumq2 = 0;
         for (int j = 0; j < block_size; ++j) {
             float al = id*xb[j];
             int l = best_index_int8(nvalues, values, al);
@@ -5064,12 +5055,8 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
                 sumqx += w*q*xb[j];
                 sumq2 += w*q*q;
             }
-        }
-        d = sq2[0] > 0 ? sqx[0]/sq2[0] : 0.f;
-        float best = d*sqx[0];
-        for (int t = 1; t < nt; ++t) {
-            if (sq2[t] > 0 && sqx[t]*sqx[t] > best*sq2[t]) {
-                d = sqx[t]/sq2[t]; best = d * sqx[t];
+            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                d = sumqx/sumq2; best = d * sumqx;
             }
         }
         scales[ib] = d;
