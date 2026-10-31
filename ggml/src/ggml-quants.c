@@ -36,7 +36,6 @@ static inline int best_index_int8(int n, const int8_t * val, float x) {
     }
     return idx;
 }
-}
 
 // reference implementation for deterministic creation of model files
 void quantize_row_q1_0_ref(const float * GGML_RESTRICT x, block_q1_0 * GGML_RESTRICT y, int64_t k) {
