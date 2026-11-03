@@ -1867,6 +1867,7 @@ struct clip_model_loader {
                         log_ffn_op = "gelu";
                         hparams.n_merge = 3; // pooling_kernel_size
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        hparams.image_resize_pad  = PAD_NONE;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         if (model.proj_type == PROJECTOR_TYPE_GEMMA4UV) {
                             // for "unified" variant, we directly use a bigger patch size, because the "token merging" is done directly on conv layer
@@ -3526,9 +3527,33 @@ struct clip_model_loader {
                         layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN,    p, il, "weight"));
                         layer.ls_2_w    = get_tensor(string_format(TN_LS_2,        p, il, "weight"));
                     }
+
+                    for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
+                        const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
+                        if (strncmp(name, "voice.", 6) != 0) {
+                            continue;
+                        }
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name);
+                        if (t->type != GGML_TYPE_F32 || ggml_n_dims(t) > 2 || t->ne[0] != model.gen_input_lin_w->ne[1]) {
+                            throw std::runtime_error(string_format("%s: invalid voice tensor %s\n", __func__, name));
+                        }
+                        auto & embd = model.gen_voices[name + 6];
+                        embd.resize(ggml_nelements(t));
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(embd.data()), ggml_nbytes(t))) {
+                            throw std::runtime_error(string_format("%s: failed to read %s\n", __func__, name));
+                        }
+                    }
+                    if (!model.gen_voices.empty()) {
+                        LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
+                    }
                 } break;
             case PROJECTOR_TYPE_LFM3A_GEN:
                 {
+                    // must match the "tts" chat template, see conversion/lfm3.py
+                    // note for contributor: this is one-off fix, do not repeat this for future models
+                    model.gen_voices = { {"female", {}}, {"male", {}} };
+
                     // depthformer, the generic loop above loaded the a.gen.code.blk.* tensors
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         model.layers[il].attn_gate_w = get_tensor(string_format(TN_ATTN_GATE, prefix, il, "weight"));
@@ -4131,11 +4156,22 @@ struct clip_model_loader {
                     const int64_t d_head     = hparams.n_head     > 0 ? hparams.n_embd     / hparams.n_head     : 0;
                     const int64_t d_head_spk = hparams.spk_n_head > 0 ? hparams.spk_n_embd / hparams.spk_n_head : 0;
                     const int64_t n_spk      = model.spk_head_fc2_w->ne[1];
-                    if (model.inp_proj_w->ne[1] != hparams.n_embd || d_head <= 0 || d_head * hparams.n_head != hparams.n_embd ||
+                    // the graph splits each fused QKV into three views of the layer width
+                    bool qkv_ok = true;
+                    for (const auto & layer : model.layers) {
+                        qkv_ok = qkv_ok && layer.qkv_w && layer.qkv_w->ne[0] == hparams.n_embd && layer.qkv_w->ne[1] == 3 * hparams.n_embd;
+                    }
+                    for (const auto & layer : model.spk_layers) {
+                        qkv_ok = qkv_ok && layer.qkv_w->ne[0] == hparams.spk_n_embd && layer.qkv_w->ne[1] == 3 * hparams.spk_n_embd;
+                    }
+                    if (!qkv_ok || model.inp_proj_w->ne[1] != hparams.n_embd || d_head <= 0 || d_head * hparams.n_head != hparams.n_embd ||
+                            (hparams.n_embd_head > 0 && hparams.n_embd_head != d_head) ||
                             hparams.audio_rope_dims <= 0 || hparams.audio_rope_dims % 2 != 0 || hparams.audio_rope_dims > d_head ||
                             d_head_spk <= 0 || d_head_spk % 2 != 0 || d_head_spk * hparams.spk_n_head != hparams.spk_n_embd ||
-                            (int64_t) model.spk_sil_emb.size() != hparams.spk_n_embd ||
-                            model.fusion_spk_kernel->ne[0] != n_spk || model.fusion_spk_kernel->ne[1] != hparams.n_embd) {
+                            (int64_t) model.spk_sil_emb.size() != hparams.spk_n_embd || n_spk <= 0 ||
+                            model.fusion_spk_kernel->ne[0] != n_spk || model.fusion_spk_kernel->ne[1] != hparams.n_embd ||
+                            hparams.mel_filters.size() != (size_t) hparams.n_mel_bins * (hparams.audio_n_fft / 2 + 1) ||
+                            hparams.window.size() != (size_t) hparams.audio_window_len) {
                         throw std::runtime_error(string_format("%s: hparams do not match the tensor shapes\n", __func__));
                     }
 
@@ -5238,6 +5274,10 @@ void clip_gen_state_reset(clip_gen_state * state) {
     if (state->buf) {
         ggml_backend_buffer_clear(state->buf.get(), 0);
     }
+}
+
+const std::map<std::string, std::vector<float>> & clip_gen_get_voices(const clip_ctx * ctx) {
+    return ctx->model.gen_voices;
 }
 
 clip_enc_state * clip_enc_state_init(clip_ctx * ctx, int32_t n_frames_max) {
