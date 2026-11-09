@@ -1801,6 +1801,66 @@ struct block_iq4_xs_packed32
 #define A_TYPE_PACKED32 block_iq4_xs_packed32
 #endif
 
+#define QUANT_K_IQ2_NL 32
+#define QUANT_R_IQ2_NL 1
+
+struct block_iq2_nl
+{
+    float16_t d;
+    uint8_t qs[QUANT_K_IQ2_NL/4];
+};
+
+// no packed32: a uint32_t member pads the 10 byte block stride to 12
+struct block_iq2_nl_packed16
+{
+    float16_t d;
+    uint16_t qs[QUANT_K_IQ2_NL/4/2];
+};
+
+#if defined(DATA_A_IQ2_NL)
+#define QUANT_K QUANT_K_IQ2_NL
+#define QUANT_R QUANT_R_IQ2_NL
+#define A_TYPE block_iq2_nl
+#define A_TYPE_PACKED16 block_iq2_nl_packed16
+#endif
+
+#define QUANT_K_IQ3_NL 32
+#define QUANT_R_IQ3_NL 1
+
+struct block_iq3_nl
+{
+    float16_t d;
+    uint8_t qh[QUANT_K_IQ3_NL/8];
+    uint8_t qs[QUANT_K_IQ3_NL/4];
+};
+
+// no packed32: a uint32_t member pads the 14 byte block stride to 16
+struct block_iq3_nl_packed16
+{
+    float16_t d;
+    uint16_t qh[QUANT_K_IQ3_NL/8/2];
+    uint16_t qs[QUANT_K_IQ3_NL/4/2];
+};
+
+#if defined(DATA_A_IQ3_NL)
+#define QUANT_K QUANT_K_IQ3_NL
+#define QUANT_R QUANT_R_IQ3_NL
+#define A_TYPE block_iq3_nl
+#define A_TYPE_PACKED16 block_iq3_nl_packed16
+
+uint iq3nl_index(uint qs_j, uint qh_g, uint j, uint g) {
+    return ((qs_j >> (2 * g)) & 3) | (((qh_g >> j) & 1) << 2);
+}
+
+uint iq3nl_hbits4(uint h) {
+    return (((h & 0xF) * 0x00204081u) & 0x01010101u) << 2;
+}
+
+uvec4 iq3nl_index4(uint qs_packed, uint qh_g, uint j0, uint g) {
+    return uvec4(unpack8(((qs_packed >> (2 * g)) & 0x03030303) | iq3nl_hbits4(qh_g >> j0)));
+}
+#endif
+
 #define QUANT_K_IQ4_NL 32
 #define QUANT_R_IQ4_NL 2
 
@@ -1870,6 +1930,42 @@ struct block_nvfp4_packed32
 #define A_TYPE_PACKED32 block_nvfp4_packed32
 #endif
 
+#if defined(DATA_A_IQ2_NL)
+const int8_t kvalues_iq2nl_const[4] = {
+    int8_t(-127), int8_t(-49), int8_t(9), int8_t(88)
+};
+
+shared FLOAT_TYPE kvalues_iq2nl[4];
+
+#define NEEDS_INIT_IQ_SHMEM
+void init_iq_shmem(uvec3 wgsize)
+{
+    // copy the table into shared memory and sync
+    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq2nl.length(); i += wgsize.x) {
+        kvalues_iq2nl[i] = FLOAT_TYPE(kvalues_iq2nl_const[i]);
+    }
+    barrier();
+}
+#endif
+
+#if defined(DATA_A_IQ3_NL)
+const int8_t kvalues_iq3nl_const[8] = {
+    int8_t(-127), int8_t(-78), int8_t(-45), int8_t(-18), int8_t(3), int8_t(30), int8_t(62), int8_t(107)
+};
+
+shared FLOAT_TYPE kvalues_iq3nl[8];
+
+#define NEEDS_INIT_IQ_SHMEM
+void init_iq_shmem(uvec3 wgsize)
+{
+    // copy the table into shared memory and sync
+    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq3nl.length(); i += wgsize.x) {
+        kvalues_iq3nl[i] = FLOAT_TYPE(kvalues_iq3nl_const[i]);
+    }
+    barrier();
+}
+#endif
+
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
     int8_t(-127), int8_t(-104), int8_t(-83), int8_t(-65), int8_t(-49), int8_t(-35), int8_t(-22), int8_t(-10),
@@ -1886,7 +1982,6 @@ shared FLOAT_TYPE kvalues_iq4nl[16];
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
-    // copy the table into shared memory and sync
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq4nl.length(); i += wgsize.x) {
 #ifdef KVALUES_IQ4NL_I8
         kvalues_iq4nl[i] = kvalues_iq4nl_const[i];
@@ -1921,8 +2016,9 @@ shared int8_t kvalues_mxfp4[16];
 #endif
 
 #if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
-// UE4M3 scale in NVFP4 blocks use only 7 bits; sign (bit 7) is always zero.
-shared float ue4m3_fp32_lut[128];
+// Cover all scale bytes accepted by ggml_validate_row_data.
+// ue4m3_to_fp32_build() masks the exponent and mantissa, but checks the full byte for 0 and 0x7F.
+shared float ue4m3_fp32_lut[256];
 
 float ue4m3_to_fp32_build(uint u) {
     if (u == 0u || u == 127u) {
@@ -1947,7 +2043,7 @@ void init_iq_shmem(uvec3 wgsize)
         kvalues_mxfp4[i] = kvalues_mxfp4_const[i];
     }
 #if defined(DATA_A_NVFP4)
-    for (uint i = gl_LocalInvocationIndex.x; i < 128u; i += wgsize.x) {
+    for (uint i = gl_LocalInvocationIndex.x; i < 256u; i += wgsize.x) {
         ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
     }
 #endif

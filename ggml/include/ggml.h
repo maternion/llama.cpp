@@ -433,7 +433,9 @@ extern "C" {
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
         GGML_TYPE_F8_E4M3 = 43,
-        GGML_TYPE_COUNT   = 44,
+        GGML_TYPE_IQ2_NL  = 44,
+        GGML_TYPE_IQ3_NL  = 45,
+        GGML_TYPE_COUNT   = 46,
     };
 
     // [TAG_GGML_PREC]
@@ -2512,6 +2514,24 @@ extern "C" {
             struct ggml_tensor  * k,
             struct ggml_tensor  * v,
             struct ggml_tensor  * mask,
+            float                 scale,
+            float                 max_bias,
+            float                 logit_softcap);
+
+    // same as ggml_flash_attn_ext, but each q slice attends to its own list of K/V rows
+    // q:       [n_embd_k, n_batch, n_head,    ne3]
+    // k:       [n_embd_k, n_rows,  n_head_kv, 1  ] shared by all q slices
+    // v:       [n_embd_v, n_rows,  n_head_kv, 1  ]
+    // mask:    [n_kv,     n_batch, ne32,      ne3]
+    // kv_rows: [n_kv,     ne3] I32, mask column i of slice i3 uses row kv_rows[i, i3] of k and v
+    // negative rows are padding, their mask entries must be -inf
+    GGML_API struct ggml_tensor * ggml_flash_attn_ext_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * kv_rows,
             float                 scale,
             float                 max_bias,
             float                 logit_softcap);

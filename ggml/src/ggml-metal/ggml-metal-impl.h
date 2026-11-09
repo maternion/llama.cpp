@@ -91,6 +91,12 @@
 #define N_SG_IQ3_S 2
 #define N_R0_IQ3_S_SPLIT 8
 
+#define N_R0_IQ2_NL 4
+#define N_SG_IQ2_NL 2
+
+#define N_R0_IQ3_NL 4
+#define N_SG_IQ3_NL 2
+
 #define N_R0_IQ4_NL 2
 #define N_SG_IQ4_NL 2
 
@@ -384,6 +390,19 @@ typedef struct {
     uint64_t nb3;
     int32_t  nblocks;
 } ggml_metal_kargs_flash_attn_ext_kv_f16;
+
+// gather the K/V cache rows referenced by the kv_rows lists into contiguous F16 buffers
+typedef struct {
+    int32_t  ne11;      // number of rows per list (n_kv_rows)
+    int32_t  ne_12_2;   // number of K/V heads
+    int32_t  ne10;      // DK
+    int32_t  ne20;      // DV, set to 0 to skip gathering V (V is a view of K)
+    uint64_t v_off;     // byte offset of the gathered V region in dst
+    uint64_t nb11;      // K source strides (ne13 = 1: the cache is shared by all streams)
+    uint64_t nb12;
+    uint64_t nb21;      // V source strides (ne23 = 1)
+    uint64_t nb22;
+} ggml_metal_kargs_flash_attn_ext_rows;
 
 typedef struct {
     int32_t  ne11;
