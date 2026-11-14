@@ -1,0 +1,1 @@
+build/bin/llama-server -m /usr/share/ollama/.ollama/models/blobs/sha256-36f9ec0e4c775f6efd3a61c1ea76f0875128469c3d012e3d9e2495a90e7a7150 -cmoe -t 8 -c 131072 -dev Vulkan1 -b 512 -ub 512 --spec-type draft-mtp --spec-draft-n-max 2 -fa on -ctk q8_0 -ctv q8_0

@@ -682,7 +682,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // only the MMA kernel reads K/V through kv_rows
     if (kv_rows) {
-        return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
+        const bool nvidia_mma = GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc);
+        // RDNA WMMA kernels exist only for DKQ <= 256 and ncols2 > 1, and only the GQA-optimized
+        // variants are compiled: require the same conditions as the dense dispatch below
+        const bool rdna_mma = amd_wmma_available(cc) && Q->ne[0] <= 256 && gqa_opt_applies;
+
+        return (nvidia_mma || rdna_mma) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
             BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
     }
 
